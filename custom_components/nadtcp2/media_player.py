@@ -17,7 +17,7 @@ from homeassistant.const import (
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect, dispatcher_send)
 
-from nadtcp import NADReceiverTCPC338, \
+from nadtcp2 import NADReceiverTCPC338, \
     CMD_POWER, CMD_VOLUME, CMD_MUTE, CMD_SOURCE
 
 _LOGGER = logging.getLogger(__name__)
