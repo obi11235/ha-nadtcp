@@ -23,11 +23,6 @@ from homeassistant.helpers.dispatcher import (
 _LOGGER = logging.getLogger(__name__)
 
 
-
-
-
-
-
 CMD_MAIN = "Main"
 CMD_BRIGHTNESS = "Main.Brightness"
 CMD_BASS_EQ = "Main.Bass"
@@ -206,7 +201,8 @@ class NADReceiverTCPC338(asyncio.Protocol):
 
     def connection_lost(self, exc):
         if exc:
-            _LOGGER.error("Disconnected from %s because of %s", self._host, exc)
+            _LOGGER.error("Disconnected from %s because of %s",
+                          self._host, exc)
         else:
             _LOGGER.debug("Disconnected from %s because of close/abort.",
                           self._host)
@@ -292,12 +288,6 @@ class NADReceiverTCPC338(asyncio.Protocol):
         return list(C338_CMDS[CMD_SOURCE]['values'])
 
 
-
-
-
-
-
-
 SIGNAL_NAD_STATE_RECEIVED = 'nad_state_received'
 
 DEFAULT_RECONNECT_INTERVAL = 10
@@ -307,11 +297,11 @@ DEFAULT_MAX_VOLUME = -10
 DEFAULT_VOLUME_STEP = 4
 
 SUPPORT_NAD = (
-    SUPPORT_VOLUME_SET 
-    | SUPPORT_VOLUME_MUTE 
-    | SUPPORT_TURN_ON 
-    | SUPPORT_TURN_OFF 
-    | SUPPORT_VOLUME_STEP 
+    SUPPORT_VOLUME_SET
+    | SUPPORT_VOLUME_MUTE
+    | SUPPORT_TURN_ON
+    | SUPPORT_TURN_OFF
+    | SUPPORT_VOLUME_STEP
     | SUPPORT_SELECT_SOURCE
 )
 
@@ -390,7 +380,7 @@ class NADEntity(MediaPlayerEntity):
     def name(self):
         """Return the name of the entity."""
         return self._name
-    
+
     @property
     def device_class(self):
         """Return the class of this device."""
@@ -400,7 +390,7 @@ class NADEntity(MediaPlayerEntity):
     def state(self):
         """Return the state of the entity."""
         return self._state
-    
+
     @property
     def icon(self):
         """Return the icon for the device."""
@@ -415,7 +405,7 @@ class NADEntity(MediaPlayerEntity):
     def source_list(self):
         """List of available input sources."""
         return self._client.available_sources()
-    
+
     @property
     def available(self):
         """Return if device is available."""
@@ -491,13 +481,15 @@ class NADEntity(MediaPlayerEntity):
 
         async def connect(event):
             await self._client.connect()
-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, disconnect)
+            self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STOP, disconnect)
 
         self._client = NADReceiverTCPC338(self._host, self.hass.loop,
                                           reconnect_interval=self._reconnect_interval,
                                           state_changed_cb=state_changed_cb)
 
-        async_dispatcher_connect(self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed)
+        async_dispatcher_connect(
+            self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed)
 
         if self.hass.is_running:
             await connect(None)
