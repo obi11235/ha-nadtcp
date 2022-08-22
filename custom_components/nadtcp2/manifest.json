@@ -1,9 +1,9 @@
 {
   "domain": "nadtcp2",
   "name": "NAD C338 integration",
-  "version": "0.2.0.dev2",
-  "documentation": "https://github.com/mindigmarton/ha-nadtcp",
-  "requirements": ["nadtcp==0.2.0.dev2"],
+  "version": "1.0.0",
+  "documentation": "https://github.com/IAmRGroot/ha-nadtcp",
+  "requirements": [],
   "dependencies": [],
-  "codeowners": ["@mindigmarton"]
+  "codeowners": ["IAmRGroot"]
 }

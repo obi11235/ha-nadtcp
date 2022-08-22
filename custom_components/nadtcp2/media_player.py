@@ -17,6 +17,9 @@ from homeassistant.const import (
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect, dispatcher_send)
 
+from nadtcp import NADReceiverTCPC338, \
+    CMD_POWER, CMD_VOLUME, CMD_MUTE, CMD_SOURCE
+
 _LOGGER = logging.getLogger(__name__)
 
 SIGNAL_NAD_STATE_RECEIVED = 'nad_state_received'
@@ -189,9 +192,6 @@ class NADEntity(MediaPlayerEntity):
         await self._client.select_source(source)
 
     async def async_added_to_hass(self):
-        from nadtcp import NADReceiverTCPC338, \
-            CMD_POWER, CMD_VOLUME, CMD_MUTE, CMD_SOURCE
-
         def state_changed_cb(state):
             dispatcher_send(self.hass, SIGNAL_NAD_STATE_RECEIVED, state)
 

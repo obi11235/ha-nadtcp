@@ -1,0 +1,18 @@
+version: "3.7"
+services:
+  python:
+    image: python:3.10
+    command: tail -F anything
+    user: 1000:1000
+    environment:
+      HOME: /tmp
+    volumes:
+      - ./:/app
+      - type: bind
+        source: /etc/passwd
+        target: /etc/passwd
+        read_only: true
+      - type: bind
+        source: /etc/group
+        target: /etc/group
+        read_only: true
