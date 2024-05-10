@@ -12,7 +12,7 @@ from homeassistant.components.media_player import (
 from homeassistant.components.media_player.const import (
     SUPPORT_VOLUME_SET,
     SUPPORT_VOLUME_MUTE, SUPPORT_TURN_ON, SUPPORT_TURN_OFF,
-    SUPPORT_VOLUME_STEP, SUPPORT_SELECT_SOURCE)
+    SUPPORT_VOLUME_STEP, SUPPORT_SELECT_SOURCE, MediaPlayerEntityFeature)
 from homeassistant.const import (
     CONF_NAME, STATE_OFF, STATE_ON, STATE_UNKNOWN, STATE_UNAVAILABLE,
     EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP)
@@ -128,7 +128,7 @@ class NADReceiverTCPC338(asyncio.Protocol):
         cmd_desc = C338_CMDS[command]
         # validate operator
         if operator in cmd_desc['supported_operators']:
-            if operator is '=' and value is None:
+            if operator == '=' and value is None:
                 raise ValueError("No value provided")
             elif operator in ['?', '-', '+'] and value is not None:
                 raise ValueError(
@@ -296,13 +296,13 @@ DEFAULT_MIN_VOLUME = -80
 DEFAULT_MAX_VOLUME = -10
 DEFAULT_VOLUME_STEP = 4
 
-SUPPORT_NAD = (
-    SUPPORT_VOLUME_SET
-    | SUPPORT_VOLUME_MUTE
-    | SUPPORT_TURN_ON
-    | SUPPORT_TURN_OFF
-    | SUPPORT_VOLUME_STEP
-    | SUPPORT_SELECT_SOURCE
+SUPPORT_NAD= (
+    MediaPlayerEntityFeature.VOLUME_SET
+    | MediaPlayerEntityFeature.VOLUME_MUTE
+    | MediaPlayerEntityFeature.TURN_ON
+    | MediaPlayerEntityFeature.TURN_OFF
+    | MediaPlayerEntityFeature.VOLUME_STEP
+    | MediaPlayerEntityFeature.SELECT_SOURCE
 )
 
 CONF_MIN_VOLUME = 'min_volume'
