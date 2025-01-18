@@ -8,11 +8,9 @@ import voluptuous as vol
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.media_player import (
-    MediaPlayerEntity, PLATFORM_SCHEMA, DEVICE_CLASS_RECEIVER)
+    MediaPlayerEntity, MediaPlayerDeviceClass, PLATFORM_SCHEMA)
 from homeassistant.components.media_player.const import (
-    SUPPORT_VOLUME_SET,
-    SUPPORT_VOLUME_MUTE, SUPPORT_TURN_ON, SUPPORT_TURN_OFF,
-    SUPPORT_VOLUME_STEP, SUPPORT_SELECT_SOURCE, MediaPlayerEntityFeature)
+    MediaPlayerEntityFeature)
 from homeassistant.const import (
     CONF_NAME, STATE_OFF, STATE_ON, STATE_UNKNOWN, STATE_UNAVAILABLE,
     EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP)
@@ -384,7 +382,7 @@ class NADEntity(MediaPlayerEntity):
     @property
     def device_class(self):
         """Return the class of this device."""
-        return DEVICE_CLASS_RECEIVER
+        return MediaPlayerDeviceClass.RECEIVER
 
     @property
     def state(self):
