@@ -109,14 +109,11 @@ class NadConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow handler."""
-        return NadOptionsFlow(config_entry)
+        return NadOptionsFlow()
 
 
 class NadOptionsFlow(OptionsFlow):
     """Handle the volume/reconnect options for a configured amplifier."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict | None = None

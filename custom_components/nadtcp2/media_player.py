@@ -43,6 +43,7 @@ from .const import (
     DOMAIN,
 )
 from .nad_client import (
+    C338_CMDS,
     CMD_MUTE,
     CMD_POWER,
     CMD_SOURCE,
@@ -53,6 +54,9 @@ from .nad_client import (
 _LOGGER = logging.getLogger(__name__)
 
 SIGNAL_NAD_STATE_RECEIVED = "nad_state_received"
+
+# The C338's input list is fixed, so it can be exposed without a connection.
+SOURCES = list(C338_CMDS[CMD_SOURCE]["values"])
 
 SUPPORT_NAD = (
     MediaPlayerEntityFeature.VOLUME_SET
@@ -122,6 +126,7 @@ class NADEntity(MediaPlayerEntity):
     _attr_device_class = MediaPlayerDeviceClass.RECEIVER
     _attr_icon = "mdi:speaker-multiple"
     _attr_supported_features = SUPPORT_NAD
+    _attr_source_list = SOURCES
 
     def __init__(self, unique_id, name, host, reconnect_interval,
                  min_volume, max_volume, volume_step):
@@ -171,11 +176,6 @@ class NADEntity(MediaPlayerEntity):
     def source(self):
         """Name of the current input source."""
         return self._source
-
-    @property
-    def source_list(self):
-        """List of available input sources."""
-        return self._client.available_sources()
 
     @property
     def available(self):
@@ -254,8 +254,14 @@ class NADEntity(MediaPlayerEntity):
 
             self.async_write_ha_state()
 
-        async def connect(event=None):
-            await self._client.connect()
+        @callback
+        def start_connect(event=None):
+            # connect() retries until it succeeds, so run it in the background
+            # to avoid blocking entity setup (and startup) when the amplifier
+            # is unreachable.
+            self.hass.async_create_background_task(
+                self._client.connect(),
+                name=f"{DOMAIN} connect {self._host}")
 
         self._client = NADReceiverTCPC338(
             self._host, self.hass.loop,
@@ -266,10 +272,10 @@ class NADEntity(MediaPlayerEntity):
             self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed))
 
         if self.hass.is_running:
-            await connect()
+            start_connect()
         else:
             self.async_on_remove(self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_START, connect))
+                EVENT_HOMEASSISTANT_START, start_connect))
 
     async def async_will_remove_from_hass(self):
         """Disconnect from the amplifier when the entity is removed."""
