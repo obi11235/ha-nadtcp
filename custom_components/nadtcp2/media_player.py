@@ -43,6 +43,7 @@ from .const import (
     DOMAIN,
 )
 from .nad_client import (
+    C338_CMDS,
     CMD_MUTE,
     CMD_POWER,
     CMD_SOURCE,
@@ -53,6 +54,9 @@ from .nad_client import (
 _LOGGER = logging.getLogger(__name__)
 
 SIGNAL_NAD_STATE_RECEIVED = "nad_state_received"
+
+# The C338's input list is fixed, so it can be exposed without a connection.
+SOURCES = list(C338_CMDS[CMD_SOURCE]["values"])
 
 SUPPORT_NAD = (
     MediaPlayerEntityFeature.VOLUME_SET
@@ -122,6 +126,7 @@ class NADEntity(MediaPlayerEntity):
     _attr_device_class = MediaPlayerDeviceClass.RECEIVER
     _attr_icon = "mdi:speaker-multiple"
     _attr_supported_features = SUPPORT_NAD
+    _attr_source_list = SOURCES
 
     def __init__(self, unique_id, name, host, reconnect_interval,
                  min_volume, max_volume, volume_step):
@@ -171,11 +176,6 @@ class NADEntity(MediaPlayerEntity):
     def source(self):
         """Name of the current input source."""
         return self._source
-
-    @property
-    def source_list(self):
-        """List of available input sources."""
-        return self._client.available_sources()
 
     @property
     def available(self):
