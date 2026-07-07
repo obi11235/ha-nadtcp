@@ -1,300 +1,60 @@
 """Support for NAD digital amplifiers which can be remote controlled via tcp/ip."""
+from __future__ import annotations
+
 import logging
-import asyncio
-import socket
-import time
 
 import voluptuous as vol
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.media_player import (
-    MediaPlayerEntity, MediaPlayerDeviceClass, PLATFORM_SCHEMA)
-from homeassistant.components.media_player.const import (
-    MediaPlayerEntityFeature)
+    MediaPlayerDeviceClass,
+    MediaPlayerEntity,
+    MediaPlayerEntityFeature,
+    PLATFORM_SCHEMA,
+)
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
-    CONF_NAME, STATE_OFF, STATE_ON, STATE_UNKNOWN, STATE_UNAVAILABLE,
-    EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP)
-
+    CONF_NAME,
+    EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_STOP,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNKNOWN,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import (
-    async_dispatcher_connect, dispatcher_send)
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import (
+    CONF_HOST,
+    CONF_MAX_VOLUME,
+    CONF_MIN_VOLUME,
+    CONF_RECONNECT_INTERVAL,
+    CONF_VOLUME_STEP,
+    DEFAULT_MAX_VOLUME,
+    DEFAULT_MIN_VOLUME,
+    DEFAULT_NAME,
+    DEFAULT_RECONNECT_INTERVAL,
+    DEFAULT_VOLUME_STEP,
+    DOMAIN,
+)
+from .nad_client import (
+    CMD_MUTE,
+    CMD_POWER,
+    CMD_SOURCE,
+    CMD_VOLUME,
+    NADReceiverTCPC338,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
+SIGNAL_NAD_STATE_RECEIVED = "nad_state_received"
 
-CMD_MAIN = "Main"
-CMD_BRIGHTNESS = "Main.Brightness"
-CMD_BASS_EQ = "Main.Bass"
-CMD_CONTROL_STANDBY = "Main.ControlStandby"
-CMD_AUTO_STANDBY = "Main.AutoStandby"
-CMD_VERSION = "Main.Version"
-CMD_MUTE = "Main.Mute"
-CMD_POWER = "Main.Power"
-CMD_AUTO_SENSE = "Main.AutoSense"
-CMD_SOURCE = "Main.Source"
-CMD_VOLUME = "Main.Volume"
-
-MSG_ON = 'On'
-MSG_OFF = 'Off'
-
-C338_CMDS = {
-    'Main':
-        {'supported_operators': ['?']
-         },
-    'Main.AnalogGain':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': range(0, 0),
-         'type': int
-         },
-    'Main.Brightness':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': range(0, 4),
-         'type': int
-         },
-    'Main.Mute':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.Power':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.Volume':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': range(-80, 0),
-         'type': float
-         },
-    'Main.Bass':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.ControlStandby':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.AutoStandby':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.AutoSense':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': [MSG_OFF, MSG_ON],
-         'type': bool
-         },
-    'Main.Source':
-        {'supported_operators': ['+', '-', '=', '?'],
-         'values': ["Stream", "Wireless", "TV", "Phono", "Coax1", "Coax2",
-                    "Opt1", "Opt2"]
-         },
-    'Main.Version':
-        {'supported_operators': ['?'],
-         'type': float
-         },
-    'Main.Model':
-        {'supported_operators': ['?'],
-         'values': ['NADC338']
-         }
-}
-
-
-class NADReceiverTCPC338(asyncio.Protocol):
-    PORT = 30001
-
-    CMD_MIN_INTERVAL = 0.15
-
-    def __init__(self, host, loop, state_changed_cb=None,
-                 reconnect_interval=15, connect_timeout=10):
-        self._loop = loop
-        self._host = host
-        self._state_changed_cb = state_changed_cb
-        self._reconnect_interval = reconnect_interval
-        self._connect_timeout = connect_timeout
-
-        self._transport = None
-        self._buffer = ''
-        self._last_cmd_time = 0
-
-        self._closing = False
-        self._state = {}
-
-    @staticmethod
-    def make_command(command, operator, value=None):
-        cmd_desc = C338_CMDS[command]
-        # validate operator
-        if operator in cmd_desc['supported_operators']:
-            if operator == '=' and value is None:
-                raise ValueError("No value provided")
-            elif operator in ['?', '-', '+'] and value is not None:
-                raise ValueError(
-                    "Operator \'%s\' cannot be called with a value" % operator)
-
-            if value is None:
-                cmd = command + operator
-            else:
-                # validate value
-                if 'values' in cmd_desc:
-                    if 'type' in cmd_desc and cmd_desc['type'] == bool:
-                        value = cmd_desc['values'][int(value)]
-                    elif value not in cmd_desc['values']:
-                        raise ValueError("Given value \'%s\' is not one of %s"
-                                         % (value, cmd_desc['values']))
-
-                cmd = command + operator + str(value)
-        else:
-            raise ValueError("Invalid operator provided %s" % operator)
-
-        return cmd
-
-    @staticmethod
-    def parse_part(response):
-        key, value = response.split('=')
-
-        cmd_desc = C338_CMDS[key]
-
-        # convert the data to the correct type
-        if 'type' in cmd_desc:
-            if cmd_desc['type'] == bool:
-                value = bool(cmd_desc['values'].index(value))
-            else:
-                value = cmd_desc['type'](value)
-
-        return key, value
-
-    def connection_made(self, transport):
-        self._transport = transport
-
-        sock = self._transport.get_extra_info('socket')
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPIDLE, 1)
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPINTVL, 10)
-        sock.setsockopt(socket.SOL_TCP, socket.TCP_KEEPCNT, 3)
-
-        _LOGGER.debug("Connected to %s", self._host)
-        self._loop.create_task(self.exec_command('Main', '?'))
-
-    def data_received(self, data):
-        data = data.decode('utf-8').replace('\x00', '')
-
-        self._buffer += data
-
-        new_state = {}
-        while '\r\n' in self._buffer:
-            line, self._buffer = self._buffer.split('\r\n', 1)
-            key, value = self.parse_part(line)
-            new_state[key] = value
-
-            # volume changes implicitly disables mute,
-            if key == 'Main.Volume' and self._state.get('Main.Mute') is True:
-                new_state['Main.Mute'] = False
-
-        if new_state:
-            _LOGGER.debug("state changed %s", new_state)
-            self._state.update(new_state)
-            if self._state_changed_cb:
-                self._state_changed_cb(self._state)
-
-    def connection_lost(self, exc):
-        if exc:
-            _LOGGER.error("Disconnected from %s because of %s",
-                          self._host, exc)
-        else:
-            _LOGGER.debug("Disconnected from %s because of close/abort.",
-                          self._host)
-        self._transport = None
-
-        self._state.clear()
-        if self._state_changed_cb:
-            self._state_changed_cb(self._state)
-
-        if not self._closing:
-            self._loop.create_task(self.connect())
-
-    async def connect(self):
-        self._closing = False
-
-        while not self._closing and not self._transport:
-            try:
-                _LOGGER.debug("Connecting to %s", self._host)
-                connection = self._loop.create_connection(
-                    lambda: self, self._host, NADReceiverTCPC338.PORT)
-                await asyncio.wait_for(
-                    connection, timeout=self._connect_timeout)
-                return
-            except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
-                _LOGGER.exception("Error connecting to %s, reconnecting in %ss",
-                                  self._host, self._reconnect_interval,
-                                  exc_info=True)
-                await asyncio.sleep(self._reconnect_interval)
-
-    async def disconnect(self):
-        self._closing = True
-        if self._transport:
-            self._transport.close()
-
-    async def exec_command(self, command, operator, value=None):
-        if self._transport:
-            # throttle commands to CMD_MIN_INTERVAL
-            cmd_wait_time = (self._last_cmd_time
-                             + NADReceiverTCPC338.CMD_MIN_INTERVAL) - time.time()
-            if cmd_wait_time > 0:
-                await asyncio.sleep(cmd_wait_time)
-            cmd = self.make_command(command, operator, value)
-            self._transport.write(cmd.encode('utf-8'))
-
-            self._last_cmd_time = time.time()
-
-    async def status(self):
-        """Return the state of the device."""
-        return self._state
-
-    async def power_off(self):
-        """Power the device off."""
-        await self.exec_command(CMD_POWER, '=', False)
-
-    async def power_on(self):
-        """Power the device on."""
-        await self.exec_command(CMD_POWER, '=', True)
-
-    async def set_volume(self, volume):
-        """Set volume level of the device. Accepts integer values -80-0."""
-        await self.exec_command(CMD_VOLUME, '=', float(volume))
-
-    async def volume_down(self):
-        await self.exec_command(CMD_VOLUME, '-')
-
-    async def volume_up(self):
-        await self.exec_command(CMD_VOLUME, '+')
-
-    async def mute(self):
-        """Mute the device."""
-        await self.exec_command(CMD_MUTE, '=', True)
-
-    async def unmute(self):
-        """Unmute the device."""
-        await self.exec_command(CMD_MUTE, '=', False)
-
-    async def select_source(self, source):
-        """Select a source from the list of sources."""
-        await self.exec_command(CMD_SOURCE, '=', source)
-
-    def available_sources(self):
-        """Return a list of available sources."""
-        return list(C338_CMDS[CMD_SOURCE]['values'])
-
-
-SIGNAL_NAD_STATE_RECEIVED = 'nad_state_received'
-
-DEFAULT_RECONNECT_INTERVAL = 10
-DEFAULT_NAME = 'NAD amplifier'
-DEFAULT_MIN_VOLUME = -80
-DEFAULT_MAX_VOLUME = -10
-DEFAULT_VOLUME_STEP = 4
-
-SUPPORT_NAD= (
+SUPPORT_NAD = (
     MediaPlayerEntityFeature.VOLUME_SET
     | MediaPlayerEntityFeature.VOLUME_MUTE
     | MediaPlayerEntityFeature.TURN_ON
@@ -303,48 +63,83 @@ SUPPORT_NAD= (
     | MediaPlayerEntityFeature.SELECT_SOURCE
 )
 
-CONF_MIN_VOLUME = 'min_volume'
-CONF_MAX_VOLUME = 'max_volume'
-CONF_VOLUME_STEP = 'volume_step'
-CONF_RECONNECT_INTERVAL = 'reconnect_interval'
-CONF_HOST = 'host'
-
+# Kept for backwards compatibility with existing YAML configurations; new
+# configurations should use the UI (config flow).
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_HOST): cv.string,
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-    vol.Optional(CONF_RECONNECT_INTERVAL, default=DEFAULT_RECONNECT_INTERVAL): int,
+    vol.Optional(CONF_RECONNECT_INTERVAL,
+                 default=DEFAULT_RECONNECT_INTERVAL): int,
     vol.Optional(CONF_MIN_VOLUME, default=DEFAULT_MIN_VOLUME): int,
     vol.Optional(CONF_MAX_VOLUME, default=DEFAULT_MAX_VOLUME): int,
     vol.Optional(CONF_VOLUME_STEP, default=DEFAULT_VOLUME_STEP): int,
 })
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Setup the NAD platform."""
-    async_add_entities([NADEntity(
-        config.get(CONF_NAME),
-        config.get(CONF_HOST),
-        config.get(CONF_RECONNECT_INTERVAL),
-        config.get(CONF_MIN_VOLUME),
-        config.get(CONF_MAX_VOLUME),
-        config.get(CONF_VOLUME_STEP),
-    )])
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info=None,
+) -> None:
+    """Import a YAML `media_player` platform config into a config entry."""
+    _LOGGER.warning(
+        "Configuring the NAD C338 integration via YAML is deprecated and "
+        "will be imported into the UI. Remove the `media_player` platform "
+        "block from your configuration once the import has completed"
+    )
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_IMPORT}, data=dict(config)
+        )
+    )
 
-    return True
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the NAD amplifier from a config entry."""
+    options = entry.options
+    async_add_entities([NADEntity(
+        entry.entry_id,
+        entry.data.get(CONF_NAME, DEFAULT_NAME),
+        entry.data[CONF_HOST],
+        options.get(CONF_RECONNECT_INTERVAL, DEFAULT_RECONNECT_INTERVAL),
+        options.get(CONF_MIN_VOLUME, DEFAULT_MIN_VOLUME),
+        options.get(CONF_MAX_VOLUME, DEFAULT_MAX_VOLUME),
+        options.get(CONF_VOLUME_STEP, DEFAULT_VOLUME_STEP),
+    )])
 
 
 class NADEntity(MediaPlayerEntity):
-    """Entity handler for the NAD protocol"""
+    """Entity handler for the NAD protocol."""
 
-    def __init__(self, name, host, reconnect_interval, min_volume, max_volume, volume_step):
-        """Initialize the entity properties"""
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_name = None
+    _attr_device_class = MediaPlayerDeviceClass.RECEIVER
+    _attr_icon = "mdi:speaker-multiple"
+    _attr_supported_features = SUPPORT_NAD
+
+    def __init__(self, unique_id, name, host, reconnect_interval,
+                 min_volume, max_volume, volume_step):
+        """Initialize the entity properties."""
         self._client = None
-        self._name = name
         self._host = host
         self._reconnect_interval = reconnect_interval
         self._min_vol = min_volume
         self._max_vol = max_volume
         self._volume_step = volume_step
+
+        self._attr_unique_id = unique_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, unique_id)},
+            name=name,
+            manufacturer="NAD",
+            model="C338",
+        )
 
         self._state = STATE_UNKNOWN
         self._muted = None
@@ -352,47 +147,25 @@ class NADEntity(MediaPlayerEntity):
         self._source = None
 
     def nad_vol_to_internal_vol(self, nad_vol):
-        """Convert the configured volume range to internal volume range.
+        """Convert the device volume range to the internal 0..1 range.
+
         Takes into account configured min and max volume.
         """
-        if nad_vol is None:
-            volume_internal = 0.0
-        elif nad_vol < self._min_vol:
-            volume_internal = 0.0
-        elif nad_vol > self._max_vol:
-            volume_internal = 1.0
-        else:
-            volume_internal = (nad_vol - self._min_vol) / \
-                              (self._max_vol - self._min_vol)
-        return volume_internal
+        if nad_vol is None or nad_vol < self._min_vol:
+            return 0.0
+        if nad_vol > self._max_vol:
+            return 1.0
+        return (nad_vol - self._min_vol) / (self._max_vol - self._min_vol)
 
     def internal_vol_to_nad_vol(self, internal_vol):
-        return int(round(internal_vol * (self._max_vol - self._min_vol) + self._min_vol))
-
-    @property
-    def should_poll(self):
-        """No polling needed."""
-        return False
-
-    @property
-    def name(self):
-        """Return the name of the entity."""
-        return self._name
-
-    @property
-    def device_class(self):
-        """Return the class of this device."""
-        return MediaPlayerDeviceClass.RECEIVER
+        """Convert the internal 0..1 range back to the device volume range."""
+        return int(round(
+            internal_vol * (self._max_vol - self._min_vol) + self._min_vol))
 
     @property
     def state(self):
         """Return the state of the entity."""
         return self._state
-
-    @property
-    def icon(self):
-        """Return the icon for the device."""
-        return "mdi:speaker-multiple"
 
     @property
     def source(self):
@@ -407,7 +180,7 @@ class NADEntity(MediaPlayerEntity):
     @property
     def available(self):
         """Return if device is available."""
-        return self._state is not STATE_UNKNOWN
+        return self._state != STATE_UNKNOWN
 
     @property
     def volume_level(self):
@@ -419,11 +192,6 @@ class NADEntity(MediaPlayerEntity):
         """Boolean if volume is currently muted."""
         return self._muted
 
-    @property
-    def supported_features(self):
-        """Flag media player features that are supported."""
-        return SUPPORT_NAD
-
     async def async_turn_off(self):
         """Turn the media player off."""
         await self._client.power_off()
@@ -434,11 +202,19 @@ class NADEntity(MediaPlayerEntity):
 
     async def async_volume_up(self):
         """Step volume up in the configured increments."""
-        await self._client.set_volume(self.internal_vol_to_nad_vol(self.volume_level) + self._volume_step * 0.5)
+        if self.volume_level is None:
+            return
+        await self._client.set_volume(
+            self.internal_vol_to_nad_vol(self.volume_level)
+            + self._volume_step * 0.5)
 
     async def async_volume_down(self):
         """Step volume down in the configured increments."""
-        await self._client.set_volume(self.internal_vol_to_nad_vol(self.volume_level) - self._volume_step * 0.5)
+        if self.volume_level is None:
+            return
+        await self._client.set_volume(
+            self.internal_vol_to_nad_vol(self.volume_level)
+            - self._volume_step * 0.5)
 
     async def async_set_volume_level(self, volume):
         """Set volume level, range 0..1."""
@@ -456,9 +232,13 @@ class NADEntity(MediaPlayerEntity):
         await self._client.select_source(source)
 
     async def async_added_to_hass(self):
+        """Set up the client and start connecting when Home Assistant is up."""
+        @callback
         def state_changed_cb(state):
-            dispatcher_send(self.hass, SIGNAL_NAD_STATE_RECEIVED, state)
+            async_dispatcher_send(
+                self.hass, SIGNAL_NAD_STATE_RECEIVED, state)
 
+        @callback
         def handle_state_changed(state):
             if CMD_POWER in state:
                 self._state = STATE_ON if state[CMD_POWER] else STATE_OFF
@@ -472,24 +252,26 @@ class NADEntity(MediaPlayerEntity):
             if CMD_SOURCE in state:
                 self._source = state[CMD_SOURCE]
 
-            self.schedule_update_ha_state()
+            self.async_write_ha_state()
 
-        async def disconnect(event):
-            await self._client.disconnect()
-
-        async def connect(event):
+        async def connect(event=None):
             await self._client.connect()
-            self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STOP, disconnect)
 
-        self._client = NADReceiverTCPC338(self._host, self.hass.loop,
-                                          reconnect_interval=self._reconnect_interval,
-                                          state_changed_cb=state_changed_cb)
+        self._client = NADReceiverTCPC338(
+            self._host, self.hass.loop,
+            reconnect_interval=self._reconnect_interval,
+            state_changed_cb=state_changed_cb)
 
-        async_dispatcher_connect(
-            self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed)
+        self.async_on_remove(async_dispatcher_connect(
+            self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed))
 
         if self.hass.is_running:
-            await connect(None)
+            await connect()
         else:
-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, connect)
+            self.async_on_remove(self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_START, connect))
+
+    async def async_will_remove_from_hass(self):
+        """Disconnect from the amplifier when the entity is removed."""
+        if self._client is not None:
+            await self._client.disconnect()
