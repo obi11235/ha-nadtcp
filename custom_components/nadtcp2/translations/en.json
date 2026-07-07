@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "NAD C338 amplifier",
+        "description": "Enter the network address of your NAD C338 amplifier.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This amplifier is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "NAD C338 options",
+        "data": {
+          "min_volume": "Minimum volume (dB)",
+          "max_volume": "Maximum volume (dB)",
+          "volume_step": "Volume step (dB)",
+          "reconnect_interval": "Reconnect interval (seconds)"
+        }
+      }
+    }
+  }
+}
