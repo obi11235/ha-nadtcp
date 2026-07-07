@@ -254,8 +254,14 @@ class NADEntity(MediaPlayerEntity):
 
             self.async_write_ha_state()
 
-        async def connect(event=None):
-            await self._client.connect()
+        @callback
+        def start_connect(event=None):
+            # connect() retries until it succeeds, so run it in the background
+            # to avoid blocking entity setup (and startup) when the amplifier
+            # is unreachable.
+            self.hass.async_create_background_task(
+                self._client.connect(),
+                name=f"{DOMAIN} connect {self._host}")
 
         self._client = NADReceiverTCPC338(
             self._host, self.hass.loop,
@@ -266,10 +272,10 @@ class NADEntity(MediaPlayerEntity):
             self.hass, SIGNAL_NAD_STATE_RECEIVED, handle_state_changed))
 
         if self.hass.is_running:
-            await connect()
+            start_connect()
         else:
             self.async_on_remove(self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_START, connect))
+                EVENT_HOMEASSISTANT_START, start_connect))
 
     async def async_will_remove_from_hass(self):
         """Disconnect from the amplifier when the entity is removed."""
